@@ -28,10 +28,14 @@ def write_data_minio():
         access_key="minio",
         secret_key="minio123"
     )
-    bucket: str = "NOM_DU_BUCKET_ICI"
+    bucket: str = "datalake"
     found = client.bucket_exists(bucket)
     if not found:
         client.make_bucket(bucket)
+
+    months = ["O1", "02","03", "04","05","06","07","08"]
+    year = "2024"
+
     else:
         print("Bucket " + bucket + " existe déjà")
 
