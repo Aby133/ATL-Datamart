@@ -1,92 +1,74 @@
 from minio import Minio
-import requests
+import urllib.request
+import pandas as pd
 import os
+import requests
 from bs4 import BeautifulSoup
-import sys
-
-# Chemins et URL constants
-
-SAVE_DIR = r"C:\Users\Aby\Documents\ATL-Datamart\data\raw"
-DATA_URL = "https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page"
-BUCKET_NAME = "yellow-taxi-data"
 
 def main():
-    # Récupère les datasets de janvier 2024 à août 2024
-    grab_data_jan_to_aug()
-    
-    # Récupère le dataset le plus récent
-    grab_latest_data()
-    
-    # Ajout des données téléchargées dans Minio
-    write_data_minio()
+    grab_data()
 
-def grab_data_jan_to_aug():
-    """Télécharge les datasets de janvier 2024 à août 2024 et les enregistre localement."""
-    r = requests.get(DATA_URL)
-    soup = BeautifulSoup(r.text, 'html.parser')
- 
-# Section pour les liens de 2024
-link_section = soup.select('#faq2024 a')  # Mise à jour pour la section 2024
-target_months = [f"2024-0{i}" for i in range(1, 9)]  # janvier à août 2024
-
-os.makedirs(SAVE_DIR, exist_ok=True)
-
-for link in link_section:
-    file_url = link['href']
-    if any(month in file_url for month in target_months) and "yellow" in file_url.lower():
-        if not file_url.startswith("http"):
-            file_url = "https://www.nyc.gov" + file_url
-        download_file(file_url, SAVE_DIR)  # Vérifiez l'indentation ici
-
-def grab_latest_data():
-    """Télécharge le dataset le plus récent disponible et l'enregistre localement."""
-    r = requests.get(DATA_URL)
-    soup = BeautifulSoup(r.text, 'html.parser')
-
-    # Récupérer le lien le plus récent qui contient "yellow"
-    link_section = soup.select('#faq2024 a')  # Mise à jour pour la section 2024
-    latest_link = None
-    for link in link_section:
-        if "yellow" in link['href'].lower():
-            latest_link = link['href']
-            break  # Sort de la boucle après avoir trouvé le premier lien "yellow"
-if latest_link:
-    if not latest_link.startswith("http"):
-        latest_link = "https://www.nyc.gov" + latest_link
-    
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    download_file(latest_link, SAVE_DIR)  # Vérifiez l'indentation ici
-
-def download_file(file_url, save_dir):
-    """Télécharge un fichier depuis un URL et le sauvegarde dans un répertoire."""
-    file_name = os.path.join(save_dir, file_url.split("/")[-1])
-    print(f"Téléchargement de {file_name}...")
-    file_data = requests.get(file_url)
-    with open(file_name, 'wb') as f:
-        f.write(file_data.content)
-
-def write_data_minio():
+def grab_data() -> None:
+    """Télécharge les fichiers du New York Yellow Taxi. 
+    Les fichiers sont enregistrés dans le dossier spécifié et uploadés vers MinIO.
     """
-    Transfère les fichiers téléchargés vers Minio.
-    """
+    local_directory = r"C:\Users\Aby\OneDrive\Documents"
+    os.makedirs(local_directory, exist_ok=True)
+
+    # URL de la page contenant les liens vers les données
+    page_url = "https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page"
+
+    # Téléchargez la page
+    response = requests.get(page_url)
+    if response.status_code != 200:
+        print(f"Erreur lors de la récupération de la page : {response.status_code}")
+        return
+
+    # Analysez la page avec BeautifulSoup
+    soup = BeautifulSoup(response.content, "html.parser")
+
+    # Recherchez tous les liens vers les fichiers CSV pour 2024
+    for month in range(1, 9):  # Pour janvier à août
+        month_str = f"{month:02d}"
+        link = soup.find("a", string=lambda text: text and f"2024-{month_str}" in text.lower())
+        if link and 'href' in link.attrs:
+            file_url = link['href']
+            if not file_url.startswith('http'):
+                file_url = requests.compat.urljoin(page_url, file_url)  # Gérer les URL relatives
+
+            # Extraire le nom du fichier
+            file_name = os.path.basename(file_url)
+            local_file_path = os.path.join(local_directory, file_name)
+
+            # Télécharger et enregistrer le fichier
+            try:
+                urllib.request.urlretrieve(file_url, local_file_path)
+                print(f"Fichier téléchargé et enregistré à : {local_file_path}")
+            except Exception as e:
+                print(f"Erreur lors du téléchargement de {file_url} : {e}")
+
+    write_data_minio(local_directory)
+
+def write_data_minio(local_directory):
+    """Upload des fichiers vers MinIO."""
     client = Minio(
         "localhost:9000",
         secure=False,
         access_key="minio",
         secret_key="minio123"
     )
-    
-    if not client.bucket_exists(BUCKET_NAME):
-        client.make_bucket(BUCKET_NAME)
-        print(f"Bucket {BUCKET_NAME} créé.")
+    bucket_name = "yellow-taxi-data"
+
+    if not client.bucket_exists(bucket_name):
+        client.make_bucket(bucket_name)
+        print(f"Bucket {bucket_name} créé.")
     else:
-        print(f"Bucket {BUCKET_NAME} existe déjà.")
+        print(f"Bucket {bucket_name} existe déjà.")
     
-    for file_name in os.listdir(SAVE_DIR):
-        file_path = os.path.join(SAVE_DIR, file_name)
-        client.fput_object(BUCKET_NAME, file_name, file_path)
-        print(f"{file_name} uploadé dans le bucket {BUCKET_NAME}.")
+    for file_name in os.listdir(local_directory):
+        file_path = os.path.join(local_directory, file_name)
+        client.fput_object(bucket_name, file_name, file_path)
+        print(f"{file_name} uploadé dans le bucket {bucket_name}.")
 
-if __name__ == '__main__':
-    sys.exit(main())
-
+if __name__ == "__main__":
+    main()
